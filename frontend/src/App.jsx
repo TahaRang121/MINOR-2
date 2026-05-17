@@ -1,54 +1,63 @@
-import { NavLink, Route, Routes } from "react-router-dom";
-import { Activity, Bot, Clock3, History, LayoutDashboard, Search } from "lucide-react";
+import { Route, Routes, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { useAuth } from './hooks/useAuth';
+import { Navbar } from './components/layout/Navbar';
+import { Footer } from './components/layout/Footer';
 
-import Chat from "./pages/Chat.jsx";
-import Dashboard from "./pages/Dashboard.jsx";
-import EventDetail from "./pages/EventDetail.jsx";
-import HistoryPage from "./pages/HistoryPage.jsx";
-import SearchPage from "./pages/SearchPage.jsx";
+// Pages
+import LandingPage from './pages/LandingPage';
+import Login from './pages/Login';
+import Signup from './pages/Signup';
+import Dashboard from './pages/Dashboard';
+import EventDetail from './pages/EventDetail';
+import Settings from './pages/Settings';
+import Events from './pages/Events';
+import Profile from './pages/Profile';
+import SearchPage from './pages/SearchPage';
+import Chat from './pages/Chat';
+import HistoryPage from './pages/HistoryPage';
+
+// Protected Route Component
+const ProtectedRoute = ({ children }) => {
+  const { isAuthenticated } = useAuth();
+  return isAuthenticated ? children : <Navigate to="/login" replace />;
+};
 
 export default function App() {
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <Activity size={26} aria-hidden="true" />
-          <div>
-            <strong>CrisisIntel</strong>
-            <span>Market impact desk</span>
-          </div>
-        </div>
-        <nav className="nav-links" aria-label="Primary navigation">
-          <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Dashboard" end />
-          <NavItem to="/search" icon={<Search size={18} />} label="Search" />
-          <NavItem to="/chat" icon={<Bot size={18} />} label="Chat" />
-          <NavItem to="/history" icon={<History size={18} />} label="History" />
-        </nav>
-        <div className="refresh-note">
-          <Clock3 size={16} aria-hidden="true" />
-          <span>Refreshes every 15 min</span>
-        </div>
-      </aside>
+  const { theme } = useAuth();
 
-      <main className="main-panel">
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.documentElement.classList.remove('light-theme', 'dark-theme');
+    document.documentElement.classList.add(theme === 'light' ? 'light-theme' : 'dark-theme');
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+  return (
+    <div className="min-h-screen flex flex-col theme-transition theme-bg">
+      <Navbar />
+      <main className="flex-1">
         <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/events/:id" element={<EventDetail />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/history" element={<HistoryPage />} />
+          {/* Public Routes */}
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+
+          {/* Protected Routes */}
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+          <Route path="/events" element={<ProtectedRoute><Events /></ProtectedRoute>} />
+          <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+          <Route path="/events/:id" element={<ProtectedRoute><EventDetail /></ProtectedRoute>} />
+          <Route path="/search" element={<ProtectedRoute><SearchPage /></ProtectedRoute>} />
+          <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+          <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
+
+          {/* 404 */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+      <Footer />
     </div>
-  );
-}
-
-function NavItem({ to, icon, label, end = false }) {
-  return (
-    <NavLink to={to} end={end} className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
-      {icon}
-      <span>{label}</span>
-    </NavLink>
   );
 }
 
