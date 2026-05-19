@@ -61,3 +61,36 @@ class NewsArticle(BaseModel):
     description: str = ""
     content: str = ""
 
+
+# Chat History Models
+class ChatMessage(BaseModel):
+    """Represents a single message in a chat conversation."""
+    id: UUID = Field(default_factory=uuid4)
+    role: str  # "user" or "assistant"
+    text: str
+    timestamp: datetime = Field(default_factory=utc_now)
+    sources: list[UUID] = Field(default_factory=list)  # Related event IDs
+
+
+class ChatConversation(BaseModel):
+    """Represents a complete chat conversation."""
+    id: UUID = Field(default_factory=uuid4)
+    title: str = "New Chat"  # Auto-generated from first message
+    messages: list[ChatMessage] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    
+    def add_message(self, role: str, text: str, sources: list[UUID] = None) -> ChatMessage:
+        """Add a message to the conversation."""
+        msg = ChatMessage(role=role, text=text, sources=sources or [])
+        self.messages.append(msg)
+        self.updated_at = utc_now()
+        return msg
+    
+    def get_preview(self, max_length: int = 100) -> str:
+        """Get a preview of the conversation."""
+        if self.messages:
+            first_user_msg = next((m.text for m in self.messages if m.role == "user"), "Chat")
+            return first_user_msg[:max_length]
+        return "Empty conversation"
+

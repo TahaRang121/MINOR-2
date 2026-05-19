@@ -1,7 +1,9 @@
 import json
 import logging
+import ssl
 from uuid import uuid4
 
+import certifi
 import httpx
 
 from app.config import Settings
@@ -21,71 +23,141 @@ logger = logging.getLogger(__name__)
 class AIAnalysisService:
     def __init__(self, settings: Settings):
         self.settings = settings
+        # Validate provider configuration early and create helpful message
+        self._missing_provider_key: str | None = None
+        if self.settings.ai_provider == 'groq' and not self.settings.groq_api_key:
+            self._missing_provider_key = 'GROQ API key is not configured (GROQ_API_KEY).'
+            logger.warning(self._missing_provider_key)
+        if self.settings.ai_provider == 'openai' and not self.settings.openai_api_key:
+            self._missing_provider_key = 'OpenAI API key is not configured (OPENAI_API_KEY).'
+            logger.warning(self._missing_provider_key)
+        if self.settings.ai_provider == 'anthropic' and not self.settings.anthropic_api_key:
+            self._missing_provider_key = 'Anthropic API key is not configured (ANTHROPIC_API_KEY).'
+            logger.warning(self._missing_provider_key)
 
     async def analyze_article(self, article: NewsArticle) -> CrisisEvent:
-        try:
-            if self.settings.ai_provider == "openai" and self.settings.openai_api_key:
-                payload = await self._openai(article)
-            elif self.settings.ai_provider == "anthropic" and self.settings.anthropic_api_key:
-                payload = await self._anthropic(article)
-            elif self.settings.ai_provider == "groq" and self.settings.groq_api_key:
-                payload = await self._groq(article)
-            else:
-                payload = self._demo_analysis(article)
-        except Exception as exc:
-            logger.warning("AI provider failed; using demo analysis for article %r: %s", article.title, exc)
-            payload = self._demo_analysis(article)
+        if getattr(self, '_missing_provider_key', None):
+            raise RuntimeError(self._missing_provider_key)
+        if self.settings.ai_provider == "openai" and self.settings.openai_api_key:
+            payload = await self._openai(article)
+        elif self.settings.ai_provider == "anthropic" and self.settings.anthropic_api_key:
+            payload = await self._anthropic(article)
+        elif self.settings.ai_provider == "groq" and self.settings.groq_api_key:
+            payload = await self._groq(article)
+        else:
+            raise RuntimeError("No AI provider configured or API key missing")
         return self._event_from_payload(article, payload)
 
-    async def answer_chat(self, message: str, context: str) -> str:
-        if self.settings.ai_provider == "openai" and self.settings.openai_api_key:
-            async with httpx.AsyncClient(timeout=20) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.settings.openai_api_key}"},
-                    json={
-                        "model": self.settings.openai_model,
-                        "messages": [
-                            {"role": "system", "content": "Answer using only the supplied crisis market context. Be concise and cite event names."},
-                            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {message}"},
-                        ],
-                    },
-                )
-                response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"]
-        if self.settings.ai_provider == "groq" and self.settings.groq_api_key:
-            async with httpx.AsyncClient(timeout=20) as client:
-                response = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.settings.groq_api_key}"},
-                    json={
-                        "model": self.settings.groq_model,
-                        "messages": [
-                            {"role": "system", "content": "Answer using only the supplied crisis market context. Be concise and cite event names."},
-                            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {message}"},
-                        ],
-                    },
-                )
-                response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"]
-        if self.settings.ai_provider == "anthropic" and self.settings.anthropic_api_key:
-            async with httpx.AsyncClient(timeout=20) as client:
-                response = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": self.settings.anthropic_api_key,
-                        "anthropic-version": "2023-06-01",
-                    },
-                    json={
-                        "model": self.settings.anthropic_model,
-                        "max_tokens": 600,
-                        "system": "Answer using only the supplied crisis market context. Be concise and cite event names.",
-                        "messages": [{"role": "user", "content": f"Context:\n{context}\n\nQuestion: {message}"}],
-                    },
-                )
-                response.raise_for_status()
-                return response.json()["content"][0]["text"]
-        return self._demo_chat(message, context)
+    async def answer_chat(self, conversation_messages: list[dict], context: str) -> str:
+        """
+        Send the full conversation history to Groq and return the assistant reply text.
+        `conversation_messages` is a list of dicts with keys: role (user/assistant) and content/text.
+        """
+        system_content = (
+            "Use the provided crisis market context and the conversation history to answer the user's question "
+            "clearly and concisely. Base the response on the supplied event context and do not invent sources or event details."
+        )
+        messages_payload = [{"role": "system", "content": f"Context:\n{context}\n\n{system_content}"}]
+
+        for m in conversation_messages:
+            role = m.get("role")
+            content = m.get("content") or m.get("text") or ""
+            if role and content is not None:
+                messages_payload.append({"role": role, "content": content})
+
+        logger.debug("Prepared messages payload to AI provider: %s", [
+            {"role": m.get("role"), "len": len(m.get("content", ""))} for m in messages_payload
+        ])
+
+        if getattr(self, '_missing_provider_key', None):
+            raise RuntimeError(self._missing_provider_key)
+
+        async def _call_chat_endpoint(url: str, headers: dict, body: dict):
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            if hasattr(ssl, "TLSVersion"):
+                ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+            safe_headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+            logger.info("Sending request to AI provider: %s", url)
+            logger.debug("SSL/OpenSSL version: %s", ssl.OPENSSL_VERSION)
+            logger.debug("Safe request headers: %s", safe_headers)
+            logger.debug("Request body sample: %s", {"model": body.get("model"), "messages_count": len(body.get("messages", []))})
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=30.0), verify=ssl_context) as client:
+                    resp = await client.post(url, headers=headers, json=body)
+                    logger.info("AI provider response status: %s", resp.status_code)
+                    logger.debug("AI provider response headers: %s", dict(resp.headers))
+                    resp.raise_for_status()
+                    return resp.json()
+            except httpx.HTTPStatusError as exc:
+                logger.error("AI provider HTTP status error: %s", exc, exc_info=True)
+                error_text = exc.response.text
+                try:
+                    error_payload = exc.response.json()
+                    error_message = error_payload.get("error") or error_payload.get("message") or error_text
+                except Exception:
+                    error_message = error_text or str(exc)
+                raise RuntimeError(f"AI provider HTTP error {exc.response.status_code}: {error_message}") from exc
+            except httpx.TimeoutException as exc:
+                logger.error("AI provider timeout error: %s", exc, exc_info=True)
+                raise RuntimeError("AI provider request timed out. Please try again.") from exc
+            except httpx.TransportError as exc:
+                logger.error("AI provider transport error: %s", exc, exc_info=True)
+                raise RuntimeError("Unable to connect to the AI provider. Please check network connectivity.") from exc
+            except Exception as exc:
+                logger.error("AI provider HTTP/TLS error: %s", exc, exc_info=True)
+                raise RuntimeError("Unexpected error communicating with AI provider.") from exc
+
+        try:
+            if self.settings.ai_provider != "groq" or not self.settings.groq_api_key:
+                raise RuntimeError("Groq AI provider is required and GROQ_API_KEY must be configured.")
+
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.settings.groq_api_key}",
+                "Content-Type": "application/json",
+            }
+
+            models_to_try = [self.settings.groq_model]
+            if self.settings.groq_fallback_model and self.settings.groq_fallback_model != self.settings.groq_model:
+                models_to_try.append(self.settings.groq_fallback_model)
+
+            last_error = None
+            for idx, model in enumerate(models_to_try):
+                body = {
+                    "model": model,
+                    "messages": messages_payload,
+                    "temperature": 0.7,
+                    "max_tokens": 700,
+                    "n": 1,
+                }
+                logger.info("Sending Groq request with model: %s", model)
+                if idx > 0:
+                    logger.warning("Retrying with fallback Groq model: %s", model)
+                logger.debug("Calling Groq URL: %s", url)
+                logger.debug("Groq request payload: %s", {"model": body["model"], "temperature": body["temperature"], "max_tokens": body["max_tokens"], "messages_count": len(messages_payload)})
+
+                try:
+                    resp_json = await _call_chat_endpoint(url, headers, body)
+                    logger.info("Groq response received from model %s", model)
+                    logger.debug("Groq assistant response preview: %s", str(resp_json)[:500])
+                    assistant_text = resp_json["choices"][0]["message"]["content"]
+                    assistant_text = assistant_text.strip()
+                    logger.info("Groq assistant reply length=%d", len(assistant_text))
+                    logger.debug("Groq assistant reply preview: %s", assistant_text[:300])
+                    return assistant_text
+                except Exception as exc:
+                    last_error = exc
+                    logger.error("Groq provider error for model %s: %s", model, exc, exc_info=True)
+                    if idx == len(models_to_try) - 1:
+                        break
+                    logger.warning("Model %s failed, attempting fallback model %s", model, models_to_try[idx + 1])
+
+            raise RuntimeError(f"Groq provider error: {last_error}") from last_error
+
+        except Exception as exc:
+            logger.error("AI provider call failed: %s", exc, exc_info=True)
+            raise RuntimeError(f"AI provider error: {str(exc)}")
+
 
     async def _openai(self, article: NewsArticle) -> dict:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -189,40 +261,3 @@ class AIAnalysisService:
         except (TypeError, ValueError):
             confidence = 50
         return max(0, min(100, confidence))
-
-    def _demo_analysis(self, article: NewsArticle) -> dict:
-        text = f"{article.title} {article.description}".lower()
-        if any(term in text for term in ["oil", "fuel", "energy", "gas"]):
-            return {
-                "event_name": "Energy Supply Disruption",
-                "location": "Global",
-                "category": "Energy",
-                "severity": "High",
-                "summary": "A supply disruption is creating stress in fuel logistics and pricing. Energy producers may benefit from tighter supply while fuel-intensive sectors face margin pressure. The market impact should persist until shipping flows and inventories normalize.",
-                "predictions": [
-                    {"sector_name": "Oil & Gas", "direction": "rise", "confidence": 84, "reasoning": "Supply constraints can lift crude and refined product prices. Producers and integrated energy companies often benefit when pricing power improves."},
-                    {"sector_name": "Airlines", "direction": "fall", "confidence": 76, "reasoning": "Fuel is a major airline expense, so price spikes pressure margins. Demand can also soften if ticket prices rise."},
-                    {"sector_name": "Transport", "direction": "fall", "confidence": 70, "reasoning": "Trucking and logistics companies face higher operating costs. Contract pricing may lag spot fuel moves, pressuring profitability."},
-                ],
-            }
-        return {
-            "event_name": "Macro Crisis Event",
-            "location": "Global",
-            "category": "Economic",
-            "severity": "Medium",
-            "summary": "A crisis event is changing expectations for growth, inflation, and investor risk appetite. Defensive sectors may hold up better while cyclical sectors face uncertainty. Market direction will depend on how quickly the disruption is contained.",
-            "predictions": [
-                {"sector_name": "Consumer Staples", "direction": "rise", "confidence": 64, "reasoning": "Defensive demand can attract capital during uncertainty. Staples companies are often less exposed to economic swings."},
-                {"sector_name": "Industrials", "direction": "fall", "confidence": 61, "reasoning": "Industrial firms can be vulnerable to supply disruption and weaker capital spending. Order timing may slip as companies reassess risk."},
-                {"sector_name": "Gold", "direction": "rise", "confidence": 67, "reasoning": "Crisis periods can increase safe-haven demand. Gold often benefits when investors hedge geopolitical or inflation risk."},
-            ],
-        }
-
-    def _demo_chat(self, message: str, context: str) -> str:
-        if not context.strip():
-            return "I do not have matching crisis data yet. Try fetching news first or broaden the search."
-        return (
-            "Based on the stored crisis analysis, the strongest signals are in sectors repeatedly tied to supply, inflation, "
-            "or safety trades. Energy-related shocks tend to support Oil & Gas while pressuring Airlines and Transport, "
-            "and macro uncertainty tends to favor defensive sectors or Gold. The confidence levels in the dashboard show how strong each stored signal is."
-        )

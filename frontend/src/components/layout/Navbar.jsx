@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Menu, X, Settings, LogOut } from 'lucide-react';
+import { Menu, X, Settings, LogOut, Sun, Moon } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { Button } from '../ui';
 import ProfileMenu from '../profile/ProfileMenu';
 
 export const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout, theme, setTheme } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -70,14 +70,27 @@ export const Navbar = () => {
           <div className="flex items-center gap-3">
             {isAuthenticated ? (
               <>
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="p-2 rounded-lg hover:bg-primary-500/20 transition-colors"
-                  onClick={() => navigate('/settings')}
-                >
-                  <Settings size={20} />
-                </motion.button>
+                <div className="flex items-center gap-2">
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    aria-label="Toggle theme"
+                    onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+                    className="p-2 rounded-lg hover:bg-primary-500/12 transition-colors"
+                    title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+                  >
+                    {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+                  </motion.button>
+
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    className="p-2 rounded-lg hover:bg-primary-500/20 transition-colors"
+                    onClick={() => navigate('/settings')}
+                  >
+                    <Settings size={20} />
+                  </motion.button>
+                </div>
                 <ProfileMenu />
               </>
             ) : (

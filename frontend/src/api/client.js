@@ -53,8 +53,27 @@ export const apiService = {
     apiClient.get('/search', { params: { q: query, limit } }),
 
   // Chat
-  chatWithAI: (message) => 
-    apiClient.post('/chat', { message }),
+  chatWithAI: (message, history = []) => 
+    apiClient.post('/chat', { message, history }),
+
+  // Chat History
+  createNewChat: (title = null) =>
+    apiClient.post('/history/new', { title }),
+  
+  listChats: (limit = 50, offset = 0) =>
+    apiClient.get('/history/list', { params: { limit, offset } }),
+  
+  getChat: (conversationId) =>
+    apiClient.get(`/history/${conversationId}`),
+  
+  deleteChat: (conversationId) =>
+    apiClient.delete(`/history/${conversationId}`),
+  
+  searchChats: (query) =>
+    apiClient.get('/history/search/query', { params: { q: query } }),
+  
+  clearAllChats: () =>
+    apiClient.post('/history/clear'),
 
   // Health check
   health: () => 
